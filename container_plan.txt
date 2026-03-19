@@ -1,0 +1,180 @@
+# MyKanban — Containerization Plan
+
+## Goal
+Package the app into Docker containers so it can run on any machine with a single command.
+
+---
+
+## Architecture: Two Containers via docker-compose
+
+  [Browser]
+      |
+      v
+  [kanban-app]  (node:20-alpine, port 3002)
+      |
+      v
+  [kanban-db]   (mysql:8.4, port 3306 internal only)
+      |
+      v
+  [mysql-data]  (named Docker volume — persists DB across restarts)
+
+No separate frontend container — Express serves the built React files as static assets,
+same as the current production setup.
+
+---
+
+## Files to Create
+
+1. kanban-api/Dockerfile         — multi-stage build for the app
+2. docker-compose.yml            — wires up app + MySQL
+3. .dockerignore                 — exclude node_modules, kanban-ui/src, etc.
+4. db/init.sql                   — DB schema run automatically on first MySQL start
+
+---
+
+## Step 1 — kanban-api/Dockerfile (multi-stage)
+
+Stage 1: BUILD (node:20-alpine)
+  - Copy kanban-ui/ source
+  - Run npm install + npm run build
+  - Output: kanban-api/public/ (built React app)
+
+Stage 2: RUN (node:20-alpine)
+  - Copy kanban-api/ (server.js, package.json)
+  - Copy public/ from Stage 1
+  - Run npm install --omit=dev
+  - EXPOSE 3002
+  - CMD ["node", "server.js"]
+
+Why multi-stage: keeps the final image small (~150MB) by not including
+Vite, React source, or build tooling.
+
+---
+
+## Step 2 — docker-compose.yml
+
+Services:
+  kanban-db:
+    image: mysql:8.4
+    environment: MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD
+    volumes:
+      - mysql-data:/var/lib/mysql      ← persists data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql  ← runs once on first start
+    healthcheck: mysqladmin ping every 5s
+    (port 3306 NOT exposed to host — internal only)
+
+  kanban-app:
+    build: kanban-api/
+    ports: "3002:3002"
+    environment: DB_HOST=kanban-db, DB_USER, DB_PASSWORD, JWT_SECRET, etc.
+    depends_on: kanban-db (with health condition)
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+
+---
+
+## Step 3 — db/init.sql
+
+Contains all three CREATE TABLE IF NOT EXISTS statements:
+  - users
+  - tickets
+  - comments
+
+MySQL runs this automatically when the container starts for the first time
+(only if the data volume is empty). Safe to re-deploy without losing data.
+
+---
+
+## Step 4 — .dockerignore
+
+  node_modules/
+  kanban-ui/node_modules/
+  kanban-api/public/        ← gets built inside Docker, don't copy local build
+  kanban-ui/.vite/
+  *.log
+  .env
+  config.yaml               ← credentials, keep out of image
+
+---
+
+## Step 5 — Secrets / Environment Variables
+
+Sensitive values should NOT be hardcoded in docker-compose.yml.
+Two options:
+
+Option A (simple): .env file next to docker-compose.yml
+  DB_PASSWORD=yourpassword
+  JWT_SECRET=a-long-random-string
+  docker-compose reads it automatically.
+  Add .env to .gitignore.
+
+Option B (production): Docker secrets or a vault tool.
+  Use this if deploying to a remote host or sharing the compose file.
+
+---
+
+## Usage After Implementation
+
+  # First time / after code changes:
+  docker compose up --build -d
+
+  # Check logs:
+  docker compose logs -f kanban-app
+
+  # Stop:
+  docker compose down
+
+  # Stop and wipe DB (destructive):
+  docker compose down -v
+
+  # Register first user (same as before):
+  curl -X POST http://localhost:3002/api/auth/register \
+    -H "Content-Type: application/json" \
+    -d '{"name":"Raj Ramani","email":"rajramani@msn.com","password":"yanni123"}'
+
+---
+
+## Migration from Current systemd Setup
+
+Current server (192.168.1.150) runs the app directly via systemd.
+To switch to Docker on the same server:
+
+  1. Install Docker: sudo apt-get install docker.io docker-compose-plugin
+  2. Stop current service: systemctl --user stop kanban-api
+  3. Copy app files and docker-compose.yml to server
+  4. docker compose up --build -d
+  5. (Optional) disable old systemd service: systemctl --user disable kanban-api
+
+The MySQL data from the old install can be exported and imported into
+the Docker volume if you want to preserve existing tickets/users:
+  mysqldump -u ailab -p kanban > kanban_backup.sql
+  # Then after Docker MySQL is up:
+  docker exec -i kanban-db mysql -u ailab -p kanban < kanban_backup.sql
+
+---
+
+## Critical Files Summary
+
+  File                          | Action
+  ------------------------------|------------------------------------------
+  kanban-api/Dockerfile         | Create (multi-stage)
+  docker-compose.yml            | Create
+  .dockerignore                 | Create
+  db/init.sql                   | Create (extract DDL from setup_db.py)
+  .env                          | Create locally, add to .gitignore
+  kanban-api/package.json       | No change needed
+  kanban-api/server.js          | No change needed (already uses env vars)
+
+---
+
+## Verification Checklist
+
+  [ ] docker compose up --build completes without errors
+  [ ] http://localhost:3002 shows login page
+  [ ] Register + login works
+  [ ] Create ticket, drag between columns, filter — all work
+  [ ] Add comment, delete comment — works
+  [ ] docker compose down + docker compose up (no --build) — data persists
+  [ ] Deploy to 192.168.1.150 — works end to end

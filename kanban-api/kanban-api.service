@@ -1,0 +1,20 @@
+[Unit]
+Description=Kanban API + Frontend
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=rajramani
+WorkingDirectory=/home/rajramani/kanban-api
+Environment=JWT_SECRET=change_me_in_production
+Environment=DB_HOST=127.0.0.1
+Environment=DB_PORT=3306
+Environment=DB_USER=ailab
+Environment=DB_PASSWORD=ailab
+Environment=DB_NAME=kanban
+ExecStart=/usr/bin/node /home/rajramani/kanban-api/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
