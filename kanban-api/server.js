@@ -94,17 +94,14 @@ app.get('/api/users', authRequired, async (_req, res) => {
   }
 });
 
-// ── Tickets routes ────────────────────────────────────────────────────────────
-app.get('/api/tickets', authRequired, async (_req, res) => {
+// ── Projects routes ───────────────────────────────────────────────────────────
+app.get('/api/projects', authRequired, async (_req, res) => {
   try {
     const [rows] = await pool.execute(`
-      SELECT t.*,
-             u1.name AS assignee_name,
-             u2.name AS creator_name
-      FROM tickets t
-      LEFT JOIN users u1 ON u1.id = t.assignee_id
-      LEFT JOIN users u2 ON u2.id = t.created_by
-      ORDER BY t.created_at DESC
+      SELECT p.*, u.name AS creator_name
+      FROM projects p
+      LEFT JOIN users u ON u.id = p.created_by
+      ORDER BY p.created_at DESC
     `);
     res.json(rows);
   } catch (err) {
@@ -113,13 +110,109 @@ app.get('/api/tickets', authRequired, async (_req, res) => {
   }
 });
 
+app.post('/api/projects', authRequired, async (req, res) => {
+  const { name, description, priority, status, planned_start_date, planned_end_date, actual_start_date, actual_end_date } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO projects (name, description, priority, status, planned_start_date, planned_end_date, actual_start_date, actual_end_date, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, description || null, priority || 'medium', status || 'planning',
+       planned_start_date || null, planned_end_date || null,
+       actual_start_date || null, actual_end_date || null,
+       req.user.id]
+    );
+    const [rows] = await pool.execute(
+      'SELECT p.*, u.name AS creator_name FROM projects p LEFT JOIN users u ON u.id = p.created_by WHERE p.id = ?',
+      [result.insertId]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/projects/:id', authRequired, async (req, res) => {
+  const { id } = req.params;
+  const { name, description, priority, status, planned_start_date, planned_end_date, actual_start_date, actual_end_date } = req.body;
+  try {
+    await pool.execute(
+      `UPDATE projects SET
+         name               = COALESCE(?, name),
+         description        = ?,
+         priority           = COALESCE(?, priority),
+         status             = COALESCE(?, status),
+         planned_start_date = ?,
+         planned_end_date   = ?,
+         actual_start_date  = ?,
+         actual_end_date    = ?
+       WHERE id = ?`,
+      [name || null,
+       description !== undefined ? description : null,
+       priority || null, status || null,
+       planned_start_date !== undefined ? planned_start_date || null : null,
+       planned_end_date   !== undefined ? planned_end_date   || null : null,
+       actual_start_date  !== undefined ? actual_start_date  || null : null,
+       actual_end_date    !== undefined ? actual_end_date    || null : null,
+       id]
+    );
+    const [rows] = await pool.execute(
+      'SELECT p.*, u.name AS creator_name FROM projects p LEFT JOIN users u ON u.id = p.created_by WHERE p.id = ?',
+      [id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/projects/:id', authRequired, async (req, res) => {
+  try {
+    const [result] = await pool.execute('DELETE FROM projects WHERE id = ?', [req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Project not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Tickets routes ────────────────────────────────────────────────────────────
+app.get('/api/tickets', authRequired, async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let sql = `
+      SELECT t.*,
+             u1.name AS assignee_name,
+             u2.name AS creator_name
+      FROM tickets t
+      LEFT JOIN users u1 ON u1.id = t.assignee_id
+      LEFT JOIN users u2 ON u2.id = t.created_by
+    `;
+    const params = [];
+    if (project_id) {
+      sql += ' WHERE t.project_id = ?';
+      params.push(Number(project_id));
+    }
+    sql += ' ORDER BY t.created_at DESC';
+    const [rows] = await pool.execute(sql, params);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.post('/api/tickets', authRequired, async (req, res) => {
-  const { title, description, status, priority, assignee_id, due_date } = req.body;
+  const { title, description, status, priority, assignee_id, due_date, project_id } = req.body;
   if (!title) return res.status(400).json({ error: 'title is required' });
   try {
     const [result] = await pool.execute(
-      `INSERT INTO tickets (title, description, status, priority, assignee_id, due_date, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tickets (title, description, status, priority, assignee_id, due_date, project_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         description || null,
@@ -127,6 +220,7 @@ app.post('/api/tickets', authRequired, async (req, res) => {
         priority || 'medium',
         assignee_id || null,
         due_date || null,
+        project_id || null,
         req.user.id,
       ]
     );

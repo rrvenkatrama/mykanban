@@ -88,7 +88,7 @@ function DroppableColumn({ col, children }) {
   )
 }
 
-export default function KanbanBoard({ user, onLogout }) {
+export default function KanbanBoard({ user, project, onBack, onLogout }) {
   const [tickets,        setTickets]        = useState([])
   const [users,          setUsers]          = useState([])
   const [modal,          setModal]          = useState(null)   // null | 'new' | ticket-object
@@ -99,8 +99,11 @@ export default function KanbanBoard({ user, onLogout }) {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
-  const load = () => api.get('/tickets').then(r => setTickets(r.data)).catch(console.error)
-  useEffect(() => { load() }, [])
+  const load = () => {
+    const url = project ? `/tickets?project_id=${project.id}` : '/tickets'
+    api.get(url).then(r => setTickets(r.data)).catch(console.error)
+  }
+  useEffect(() => { load() }, [project?.id])
   useEffect(() => {
     api.get('/users').then(r => setUsers(r.data)).catch(() => {})
   }, [])
@@ -153,7 +156,12 @@ export default function KanbanBoard({ user, onLogout }) {
   return (
     <div>
       <header style={S.header}>
-        <span style={S.headerTitle}>Kanban Board</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {onBack && (
+            <button style={S.btn('#1565c0')} onClick={onBack}>← Projects</button>
+          )}
+          <span style={S.headerTitle}>{project ? project.name : 'Kanban Board'}</span>
+        </div>
         <div style={S.headerRight}>
           <span>Hi, {user.name}</span>
           <button style={S.btn('#1a73e8')} onClick={() => setModal('new')}>+ New Ticket</button>
@@ -225,6 +233,7 @@ export default function KanbanBoard({ user, onLogout }) {
         <TicketModal
           ticket={modal === 'new' ? null : modal}
           user={user}
+          projectId={project?.id}
           onClose={() => setModal(null)}
           onSaved={handleSaved}
         />

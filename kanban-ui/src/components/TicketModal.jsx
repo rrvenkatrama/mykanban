@@ -62,7 +62,7 @@ const S = {
 
 const BLANK = { title: '', description: '', status: 'backlog', priority: 'medium', assignee_id: '', due_date: '' }
 
-export default function TicketModal({ ticket, user, onClose, onSaved }) {
+export default function TicketModal({ ticket, user, projectId, onClose, onSaved }) {
   const [form,           setForm]           = useState(ticket ? { ...ticket, assignee_id: ticket.assignee_id || '', due_date: ticket.due_date ? ticket.due_date.slice(0,10) : '' } : BLANK)
   const [users,          setUsers]          = useState([])
   const [error,          setError]          = useState('')
@@ -93,6 +93,7 @@ export default function TicketModal({ ticket, user, onClose, onSaved }) {
         ...form,
         assignee_id: form.assignee_id ? Number(form.assignee_id) : null,
         due_date:    form.due_date || null,
+        project_id:  projectId || null,
       }
       let res
       if (ticket) {

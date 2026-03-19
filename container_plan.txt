@@ -77,9 +77,10 @@ volumes:
 
 ## Step 3 — db/init.sql
 
-Contains all three CREATE TABLE IF NOT EXISTS statements:
+Contains all four CREATE TABLE IF NOT EXISTS statements:
   - users
-  - tickets
+  - projects    ← added for project-level kanban
+  - tickets     ← includes project_id FK column
   - comments
 
 MySQL runs this automatically when the container starts for the first time
@@ -148,7 +149,7 @@ To switch to Docker on the same server:
   5. (Optional) disable old systemd service: systemctl --user disable kanban-api
 
 The MySQL data from the old install can be exported and imported into
-the Docker volume if you want to preserve existing tickets/users:
+the Docker volume if you want to preserve existing data (users, projects, tickets, comments):
   mysqldump -u ailab -p kanban > kanban_backup.sql
   # Then after Docker MySQL is up:
   docker exec -i kanban-db mysql -u ailab -p kanban < kanban_backup.sql

@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import LoginPage    from './components/LoginPage.jsx'
+import ProjectsPage from './components/ProjectsPage.jsx'
 import KanbanBoard  from './components/KanbanBoard.jsx'
 
 export default function App() {
@@ -7,6 +8,7 @@ export default function App() {
     const raw = localStorage.getItem('kanban_user')
     return raw ? JSON.parse(raw) : null
   })
+  const [selectedProject, setSelectedProject] = useState(null)
 
   const handleLogin = (token, userData) => {
     localStorage.setItem('kanban_token', token)
@@ -18,8 +20,27 @@ export default function App() {
     localStorage.removeItem('kanban_token')
     localStorage.removeItem('kanban_user')
     setUser(null)
+    setSelectedProject(null)
   }
 
   if (!user) return <LoginPage onLogin={handleLogin} />
-  return <KanbanBoard user={user} onLogout={handleLogout} />
+
+  if (selectedProject) {
+    return (
+      <KanbanBoard
+        user={user}
+        project={selectedProject}
+        onBack={() => setSelectedProject(null)}
+        onLogout={handleLogout}
+      />
+    )
+  }
+
+  return (
+    <ProjectsPage
+      user={user}
+      onLogout={handleLogout}
+      onSelectProject={setSelectedProject}
+    />
+  )
 }

@@ -30,10 +30,13 @@ mykanban/
 ├── kanban-ui/           # React source (Vite)
 │   └── src/
 │       └── components/
-│           ├── KanbanBoard.jsx   # Board, drag-and-drop, filters
+│           ├── ProjectsPage.jsx  # Project list (home screen)
+│           ├── ProjectModal.jsx  # Create/edit project form
+│           ├── KanbanBoard.jsx   # Board, drag-and-drop, filters (project-scoped)
 │           └── TicketModal.jsx   # Create/edit ticket + comments
 ├── setup_db.py              # Creates users + tickets tables
 ├── migrate_add_comments.py  # Adds comments table
+├── migrate_add_projects.py  # Adds projects table + project_id on tickets
 ├── config.yaml              # DB connection config (local dev)
 └── install.sh               # Full server install script
 ```
@@ -118,8 +121,20 @@ curl -X POST http://<server>:3002/api/auth/register \
 
 ```sql
 users       (id, name, email, password_hash, created_at)
-tickets     (id, title, description, status, priority, assignee_id, due_date, created_by, created_at, updated_at)
+projects    (id, name, description, priority, status, planned_start_date, planned_end_date, actual_start_date, actual_end_date, created_by, created_at)
+tickets     (id, title, description, status, priority, assignee_id, due_date, project_id, created_by, created_at, updated_at)
 comments    (id, ticket_id, user_id, body, created_at)
+```
+
+Fresh install — run once:
+```bash
+python3 setup_db.py   # creates all 4 tables (users, projects, tickets, comments)
+```
+
+Upgrading an existing install (tables already exist):
+```bash
+python3 migrate_add_comments.py   # adds comments table if missing
+python3 migrate_add_projects.py   # adds projects table + project_id on tickets if missing
 ```
 
 ---
@@ -139,7 +154,7 @@ Everything needed to containerize this app:
 **docker-compose (app + MySQL together):**
 - Service 1: `node:20-alpine` running `server.js`
 - Service 2: `mysql:8.4` with a bind-mounted init SQL or volume
-- MySQL init script = the CREATE TABLE statements in `setup_db.py` + `migrate_add_comments.py`
+- MySQL init script = the CREATE TABLE statements in `setup_db.py` + `migrate_add_comments.py` + `migrate_add_projects.py`
 - Connect them via a Docker network; set `DB_HOST=mysql` (service name)
 
 **Key things to preserve for containerization:**

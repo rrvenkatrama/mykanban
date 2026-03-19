@@ -1,86 +1,43 @@
-# Kanban Dashboard — Completion Plan
-# Generated: 2026-03-18
+# Kanban Dashboard — Projects Feature Plan
+# Generated: 2026-03-19
 
-## Current State
-Core app is already built:
-- Node.js/Express backend with JWT auth + full CRUD for tickets
-- React/Vite frontend with 4-column board, drag-drop (@dnd-kit), ticket modal
-- MySQL schema (users + tickets tables)
-- Systemd service file + setup.sh for deployment
-- Remote server: 192.168.1.150:3002 (user: rajramani), DB user: ailab
+## Goal
+Add project-level kanban: user sees a Projects list first, picks a project, then sees that project's kanban board.
 
-## Outstanding Work (in order)
+## New Project Fields
+- name (required)
+- description
+- priority: low | medium | high
+- status: planning | active | on_hold | completed
+- planned_start_date, planned_end_date (DATE)
+- actual_start_date, actual_end_date (DATE)
+- created_by, created_at
 
-### 1. Fix: Drag to Empty Column
-File: kanban-ui/src/components/KanbanBoard.jsx
-- Column <div> elements are not registered as droppable targets
-- Fix: Create DroppableColumn sub-component using useDroppable({ id: col.id }) from @dnd-kit/core
-- Spread setNodeRef onto the column container div
-- handleDragEnd already handles the fallback (over.id as column ID) — no changes needed there
+## DB Changes (migrate_add_projects.py)
+1. CREATE TABLE projects (id, name, description, priority, status, planned_start_date, planned_end_date, actual_start_date, actual_end_date, created_by FK→users, created_at)
+2. ALTER TABLE tickets ADD COLUMN project_id INT UNSIGNED NULL FK→projects(ON DELETE SET NULL)
 
-### 2. Filter / Search UI (client-side only, no backend changes)
-File: kanban-ui/src/components/KanbanBoard.jsx
-- Add state: search (string), filterPriority ('low'|'medium'|'high'|''), filterAssignee (''|user id)
-- Add filter bar below header: search input + priority select + assignee select
-- Assignee select populated from existing /api/users endpoint
-- byStatus() filters using these values before rendering
+## Backend Changes (kanban-api/server.js)
+- GET    /api/projects       — list all projects
+- POST   /api/projects       — create project (auth)
+- PUT    /api/projects/:id   — update project (auth)
+- DELETE /api/projects/:id   — delete project (auth)
+- GET    /api/tickets?project_id=X — filter tickets by project
+- POST   /api/tickets — accept project_id field
 
-### 3. Comments on Tickets
+## New UI Files
+- kanban-ui/src/components/ProjectsPage.jsx  — grid of project cards, create/edit/delete
+- kanban-ui/src/components/ProjectModal.jsx  — create/edit project form (all fields)
 
-#### DB Migration (new file: migrate_add_comments.py)
-CREATE TABLE IF NOT EXISTS comments (
-  id          INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  ticket_id   INT UNSIGNED NOT NULL,
-  user_id     INT UNSIGNED NOT NULL,
-  body        TEXT NOT NULL,
-  created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
-  FOREIGN KEY (user_id)   REFERENCES users(id)
-);
+## Modified UI Files
+- kanban-ui/src/App.jsx          — show ProjectsPage by default; pass selectedProject to KanbanBoard
+- kanban-ui/src/components/KanbanBoard.jsx — accept project prop, filter tickets by project.id, show project name in header, Back button
 
-#### Backend (kanban-api/server.js) — add 3 routes:
-- GET  /api/tickets/:id/comments  → list comments with author name (JOIN users)
-- POST /api/tickets/:id/comments  → insert comment (auth required), return full row
-- DELETE /api/comments/:id        → delete own comment only (check req.user.id === user_id)
+## Navigation Flow
+Login → ProjectsPage (list) → click project → KanbanBoard (project-scoped) → Back → ProjectsPage
 
-#### Frontend (kanban-ui/src/components/TicketModal.jsx)
-- When editing an existing ticket, fetch comments from GET /api/tickets/:id/comments
-- Show scrollable list: author name, timestamp, body
-- Add textarea + "Add Comment" button → POST /api/tickets/:id/comments
-- Show delete button on own comments → DELETE /api/comments/:id
-
-### 4. Deploy to Remote Server
-Step A — Build locally:
-  cd kanban-ui && npm install && npm run build
-  (outputs to kanban-api/public/)
-
-Step B — Copy to server:
+## Deployment
+After implementation:
+  cd kanban-ui && npm run build
   rsync -avz kanban-api/ rajramani@192.168.1.150:/home/rajramani/kanban-api/
-
-Step C — On server, install and start:
-  cd /home/rajramani/kanban-api && npm install --omit=dev
-  sudo cp /home/rajramani/kanban-api.service /etc/systemd/system/kanban-api.service
-  # Edit service file to set real DB_PASSWORD and JWT_SECRET env vars
-  sudo systemctl daemon-reload
-  sudo systemctl enable kanban-api
-  sudo systemctl restart kanban-api
-
-Step D — Run DB migrations on server:
-  python3 setup_db.py                 # creates users + tickets if not exists
-  python3 migrate_add_comments.py     # creates comments table
-
-## Files to Modify
-- kanban-ui/src/components/KanbanBoard.jsx   (drag fix + filter bar)
-- kanban-ui/src/components/TicketModal.jsx   (comments section)
-- kanban-api/server.js                       (3 new comment routes)
-- migrate_add_comments.py                    (new file — DB migration)
-
-## Verification Checklist
-[ ] npm run build completes without errors
-[ ] Drag card to empty column → card moves, status updates in DB
-[ ] Search box filters tickets by title
-[ ] Priority/assignee dropdowns filter board correctly
-[ ] Open ticket in edit mode → comments load
-[ ] Add comment → appears immediately
-[ ] Delete own comment → removed
-[ ] Visit http://192.168.1.150:3002 → login page loads, full board works
+  ssh rajramani@192.168.1.150 "cd /home/rajramani && python3 kanban-api/../migrate_add_projects.py && systemctl --user restart kanban-api"
