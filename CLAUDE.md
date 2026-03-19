@@ -61,5 +61,15 @@ curl -X POST http://192.168.1.150:3002/api/auth/register \
   -d '{"name":"Name","email":"email@example.com","password":"password"}'
 ```
 
+## systemd Service Notes (learned the hard way)
+Both services now auto-start reliably after reboot. Key rules applied:
+- `WantedBy=default.target` — user services must be in `default.target.wants/`, NOT `multi-user.target.wants/`
+- `ExecStartPre=-/usr/bin/fuser -k PORT/tcp` — kills stale port holder before Node starts
+- `ExecStartPre=/bin/sleep 5` — boot settle time
+- `StartLimitIntervalSec=0` — prevents permanent blocking after repeated failures
+- No system service references in `After=` (e.g. no `mysql.service`)
+- After enabling, verify: `ls ~/.config/systemd/user/default.target.wants/`
+- See `NodeServiceRestartIssueFix.txt` for full diagnosis
+
 ## What's Next
 - Docker containerization (see `container_plan.txt`)

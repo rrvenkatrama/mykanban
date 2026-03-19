@@ -1,0 +1,108 @@
+# Node.js systemd Service Auto-Start Issue & Fix
+# Date: 2026-03-19
+# Server: 192.168.1.150 (Ubuntu 25.10)
+
+## Symptoms
+- After server reboot, `bank-api` (port 3000) and `kanban-api` (port 3002) did not come back automatically
+- `systemctl --user status <service>` showed "Unit could not be found" or "inactive (dead)"
+- `ss -tlnp | grep node` showed the process was actually running (for bank-api)
+- For kanban-api: nothing running at all after reboot
+
+---
+
+## Root Causes Found (in order of discovery)
+
+### 1. bank-api had no systemd service file at all
+- It was started manually (`node server.js`) and had no `.service` file
+- Would not survive any reboot
+- **Fix:** Created `~/.config/systemd/user/bank-api.service` and enabled it
+
+### 2. kanban-api was registered under the wrong systemd target
+- The service file had `WantedBy=default.target` but the enable symlink was in
+  `~/.config/systemd/user/multi-user.target.wants/kanban-api.service`
+- `multi-user.target` is a SYSTEM-level target; it does not exist in a user session
+- systemd silently never started the service at boot (ConditionResult=no / AssertResult=no)
+- **Fix:** `systemctl --user disable kanban-api && systemctl --user enable kanban-api`
+  This moved the symlink to `default.target.wants/` where user services belong
+
+### 3. Stale orphaned processes holding ports after reboot
+- During boot, systemd's user session starts early via `loginctl enable-linger`
+- A race condition caused two invocations of the service: the first starts and holds the port,
+  the second (tracked by systemd) fails to bind the port and exits
+- Because the first process exited with status=0 (not failure), `Restart=on-failure` did not retry
+- **Fix:** Added `ExecStartPre=-/usr/bin/fuser -k PORT/tcp` to kill any stale process
+  on the port before Node starts. The `-` prefix means "ignore failure if port is free."
+
+### 4. ExecStartPre placed in wrong section
+- An earlier edit placed `ExecStartPre=/bin/sleep 5` in the `[Unit]` section instead of `[Service]`
+- systemd silently ignored it, logging: "Unknown key 'ExecStartPre' in section [Unit]"
+- **Fix:** Rewrote the service file with ExecStartPre correctly under `[Service]`
+
+### 5. After=mysql.service in user service file
+- `After=mysql.service` in a user service is silently ignored — user session cannot
+  reference system-level services in ordering directives
+- **Fix:** Removed it, kept only `After=network.target`
+
+### 6. Restart limit blocking auto-start permanently
+- kanban-api had hit `StartLimitBurst` (9 failures) in a very early boot session due to EADDRINUSE
+- This caused systemd to mark the service as permanently blocked across reboots
+- **Fix:** Added `StartLimitIntervalSec=0` to the `[Unit]` section (disables the limit)
+
+---
+
+## Final Working Service File Template
+
+```ini
+[Unit]
+Description=<Service Name>
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rajramani/<app-dir>
+Environment=KEY=VALUE
+ExecStartPre=/bin/sleep 5
+ExecStartPre=-/usr/bin/fuser -k PORT/tcp
+ExecStart=/usr/bin/node /home/rajramani/<app-dir>/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Key rules:
+- `WantedBy=default.target` — NOT multi-user.target for user services
+- `ExecStartPre=-/usr/bin/fuser -k PORT/tcp` — clears stale port holder before start
+- `ExecStartPre=/bin/sleep 5` — gives system time to settle after boot
+- `StartLimitIntervalSec=0` — prevents permanent blocking after repeated failures
+- No references to system services (mysql.service etc.) in After=
+- Always run `systemctl --user enable <service>` AFTER the WantedBy is set correctly
+
+## Deployment Checklist for New Node Services
+
+1. Create service file with the template above
+2. Copy to `~/.config/systemd/user/<name>.service` on server
+3. `systemctl --user daemon-reload`
+4. `systemctl --user enable <name>`   ← creates symlink in default.target.wants/
+5. `systemctl --user start <name>`
+6. Verify: `ls ~/.config/systemd/user/default.target.wants/` — service must appear here
+7. Verify: `systemctl --user status <name>` — active (running)
+8. Reboot and re-verify both services
+
+## Verification Commands
+
+```bash
+# Check both services
+systemctl --user status bank-api kanban-api --no-pager
+
+# Check ports
+ss -tlnp | grep node
+
+# Check symlinks (both services must be here, NOT in multi-user.target.wants)
+ls ~/.config/systemd/user/default.target.wants/
+
+# Check logs
+journalctl --user -u <service> -n 30 --no-pager
+```

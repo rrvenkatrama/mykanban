@@ -96,5 +96,16 @@ curl -X POST http://192.168.1.150:3002/api/auth/register \
   -d '{"name":"Name","email":"email@example.com","password":"password"}'
 ```
 
+## systemd Service Status (as of 2026-03-19)
+Both services auto-start reliably after reboot. Service files live at:
+- `~/.config/systemd/user/kanban-api.service`
+- `~/.config/systemd/user/bank-api.service` (separate app, port 3000, DB: ailab/ailab db: ailab)
+
+Issues resolved — see `NodeServiceRestartIssueFix.txt` for full diagnosis. Key rules:
+- `WantedBy=default.target` (not multi-user.target) — user services go in `default.target.wants/`
+- `ExecStartPre=-/usr/bin/fuser -k PORT/tcp` — clears stale port before start
+- `StartLimitIntervalSec=0` — prevents permanent block after restart failures
+- No system service refs in `After=` (mysql.service etc. don't work in user scope)
+
 ## What's Next (planned)
 - Docker containerization (see `container_plan.txt`)
