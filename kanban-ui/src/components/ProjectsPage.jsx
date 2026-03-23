@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import api from '../api.js'
 import ProjectModal from './ProjectModal.jsx'
+import UsersModal from './UsersModal.jsx'
 
 const PRIORITY_COLOR = { low: '#36b37e', medium: '#ff991f', high: '#de350b' }
 const STATUS_COLOR   = { planning: '#6554c0', active: '#0052cc', on_hold: '#ff991f', completed: '#36b37e' }
@@ -53,9 +54,10 @@ const S = {
 const fmt = (d) => d ? new Date(d).toLocaleDateString() : '—'
 
 export default function ProjectsPage({ user, onLogout, onSelectProject }) {
-  const [projects, setProjects] = useState([])
-  const [modal,    setModal]    = useState(null)   // null | 'new' | project-object
-  const [hovered,  setHovered]  = useState(null)
+  const [projects,   setProjects]   = useState([])
+  const [modal,      setModal]      = useState(null)   // null | 'new' | project-object
+  const [hovered,    setHovered]    = useState(null)
+  const [showUsers,  setShowUsers]  = useState(false)
 
   useEffect(() => {
     api.get('/projects').then(r => setProjects(r.data)).catch(console.error)
@@ -82,6 +84,7 @@ export default function ProjectsPage({ user, onLogout, onSelectProject }) {
         <div style={S.headerRight}>
           <span>Hi, {user.name}</span>
           <button style={S.btn('#1a73e8')} onClick={() => setModal('new')}>+ New Project</button>
+          <button style={S.btn('#6554c0')} onClick={() => setShowUsers(true)}>Manage Users</button>
           <button style={S.btn('#de350b')} onClick={onLogout}>Logout</button>
         </div>
       </header>
@@ -147,6 +150,8 @@ export default function ProjectsPage({ user, onLogout, onSelectProject }) {
           onSaved={handleSaved}
         />
       )}
+
+      {showUsers && <UsersModal onClose={() => setShowUsers(false)} />}
     </div>
   )
 }

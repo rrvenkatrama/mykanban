@@ -83,11 +83,77 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// ── Users route ───────────────────────────────────────────────────────────────
+// ── Users routes ──────────────────────────────────────────────────────────────
 app.get('/api/users', authRequired, async (_req, res) => {
   try {
     const [rows] = await pool.execute('SELECT id, name, email FROM users ORDER BY name');
     res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/users', authRequired, async (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'name, email, and password are required' });
+  }
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const [result] = await pool.execute(
+      'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
+      [name, email, hash]
+    );
+    res.status(201).json({ id: result.insertId, name, email });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/users/:id', authRequired, async (req, res) => {
+  const { id } = req.params;
+  const { name, email, password } = req.body;
+  try {
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      await pool.execute(
+        'UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), password_hash = ? WHERE id = ?',
+        [name || null, email || null, hash, id]
+      );
+    } else {
+      await pool.execute(
+        'UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email) WHERE id = ?',
+        [name || null, email || null, id]
+      );
+    }
+    const [rows] = await pool.execute('SELECT id, name, email FROM users WHERE id = ?', [id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/users/:id', authRequired, async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Unassign tickets and move them back to todo
+    await pool.execute(
+      "UPDATE tickets SET assignee_id = NULL, status = 'todo' WHERE assignee_id = ?",
+      [id]
+    );
+    const [result] = await pool.execute('DELETE FROM users WHERE id = ?', [id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ message: 'Deleted' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
