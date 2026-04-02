@@ -42,7 +42,7 @@ const S = {
   }),
 }
 
-export default function TicketCard({ ticket, onEdit, onDelete }) {
+export default function TicketCard({ ticket, isBookmarked, onView, onEdit, onDelete, onToggleBookmark }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: ticket.id })
 
@@ -54,7 +54,7 @@ export default function TicketCard({ ticket, onEdit, onDelete }) {
   return (
     <div ref={setNodeRef} style={{ ...S.card(isDragging), ...style }}
          {...attributes} {...listeners}>
-      <div style={S.title}>{ticket.title}</div>
+      <div style={S.title}><span style={{ color: '#6b778c', fontWeight: 400 }}>#{ticket.id}</span> {ticket.title}</div>
       <div>
         <span style={S.badge(ticket.priority)}>{ticket.priority}</span>
         {ticket.assignee_name && (
@@ -65,9 +65,22 @@ export default function TicketCard({ ticket, onEdit, onDelete }) {
         <div style={S.meta}>Due: {ticket.due_date.slice(0, 10)}</div>
       )}
       <div style={S.actions}>
+        <button style={S.btn('#6554c0')}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onView(ticket) }}>View</button>
         <button style={S.btn('#0052cc')}
                 onPointerDown={e => e.stopPropagation()}
                 onClick={(e) => { e.stopPropagation(); onEdit(ticket) }}>Edit</button>
+        <button
+                style={{
+                  ...S.btn(isBookmarked ? '#ff991f' : 'transparent'),
+                  color: isBookmarked ? '#fff' : '#ff991f',
+                  border: '1px solid #ff991f',
+                }}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onToggleBookmark(ticket.id) }}
+                title={isBookmarked ? 'Remove bookmark' : 'Bookmark this ticket'}
+        >{isBookmarked ? '★' : '☆'}</button>
         <button style={S.btn('#de350b')}
                 onPointerDown={e => e.stopPropagation()}
                 onClick={(e) => { e.stopPropagation(); onDelete(ticket.id) }}>Delete</button>

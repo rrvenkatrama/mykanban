@@ -53,11 +53,12 @@ const S = {
 
 const fmt = (d) => d ? new Date(d).toLocaleDateString() : '—'
 
-export default function ProjectsPage({ user, onLogout, onSelectProject }) {
-  const [projects,   setProjects]   = useState([])
-  const [modal,      setModal]      = useState(null)   // null | 'new' | project-object
-  const [hovered,    setHovered]    = useState(null)
-  const [showUsers,  setShowUsers]  = useState(false)
+export default function ProjectsPage({ user, onLogout, onSelectProject, onShowNews, onShowBookmarks }) {
+  const [projects,     setProjects]     = useState([])
+  const [modal,        setModal]        = useState(null)   // null | 'new' | project-object
+  const [viewProject,  setViewProject]  = useState(null)
+  const [hovered,      setHovered]      = useState(null)
+  const [showUsers,    setShowUsers]    = useState(false)
 
   useEffect(() => {
     api.get('/projects').then(r => setProjects(r.data)).catch(console.error)
@@ -84,6 +85,8 @@ export default function ProjectsPage({ user, onLogout, onSelectProject }) {
         <div style={S.headerRight}>
           <span>Hi, {user.name}</span>
           <button style={S.btn('#1a73e8')} onClick={() => setModal('new')}>+ New Project</button>
+          <button style={S.btn('#00875a')} onClick={onShowNews}>AI News</button>
+          <button style={S.btn('#ff991f')} onClick={onShowBookmarks}>★ Bookmarks</button>
           <button style={S.btn('#6554c0')} onClick={() => setShowUsers(true)}>Manage Users</button>
           <button style={S.btn('#de350b')} onClick={onLogout}>Logout</button>
         </div>
@@ -119,6 +122,12 @@ export default function ProjectsPage({ user, onLogout, onSelectProject }) {
 
                 <div style={S.cardFooter}>
                   <button
+                    style={S.btnSmall('#6554c0')}
+                    onClick={e => { e.stopPropagation(); setViewProject(p) }}
+                  >
+                    View
+                  </button>
+                  <button
                     style={S.btnSmall('#f4f5f7', '#172b4d')}
                     onClick={e => { e.stopPropagation(); setModal(p) }}
                   >
@@ -149,6 +158,45 @@ export default function ProjectsPage({ user, onLogout, onSelectProject }) {
           onClose={() => setModal(null)}
           onSaved={handleSaved}
         />
+      )}
+
+      {viewProject && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(9,30,66,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 8, padding: '1.5rem',
+            width: 560, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+          }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.35rem', color: '#172b4d' }}>
+              {viewProject.name}
+            </h2>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              <span style={S.badge(STATUS_COLOR[viewProject.status])}>{STATUS_LABEL[viewProject.status]}</span>
+              <span style={S.badge(PRIORITY_COLOR[viewProject.priority])}>
+                {viewProject.priority.charAt(0).toUpperCase() + viewProject.priority.slice(1)} Priority
+              </span>
+            </div>
+            <div style={{ fontWeight: 600, fontSize: '0.8rem', color: '#172b4d', marginBottom: '0.25rem' }}>Description</div>
+            <div style={{
+              padding: '0.45rem 0.65rem', borderRadius: 4, border: '1px solid #dfe1e6',
+              fontSize: '0.9rem', minHeight: 60, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              color: viewProject.description ? '#172b4d' : '#6b778c', background: '#f4f5f7',
+              marginBottom: '1rem',
+            }}>
+              {viewProject.description || 'No description.'}
+            </div>
+            <div style={S.dateRow}>
+              <div><strong>Planned:</strong> {fmt(viewProject.planned_start_date)} → {fmt(viewProject.planned_end_date)}</div>
+              <div><strong>Actual: </strong> {fmt(viewProject.actual_start_date)} → {fmt(viewProject.actual_end_date)}</div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button style={S.btn('#f4f5f7', '#172b4d')} onClick={() => setViewProject(null)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showUsers && <UsersModal onClose={() => setShowUsers(false)} />}

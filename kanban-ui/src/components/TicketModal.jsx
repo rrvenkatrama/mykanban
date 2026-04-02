@@ -60,10 +60,13 @@ const S = {
   },
 }
 
-const BLANK = { title: '', description: '', status: 'backlog', priority: 'medium', assignee_id: '', due_date: '' }
+const BLANK = { title: '', description: '', status: 'backlog', priority: 'medium', assignee_id: '', due_date: '', sprint_id: '' }
 
-export default function TicketModal({ ticket, user, projectId, onClose, onSaved }) {
-  const [form,           setForm]           = useState(ticket ? { ...ticket, assignee_id: ticket.assignee_id || '', due_date: ticket.due_date ? ticket.due_date.slice(0,10) : '' } : BLANK)
+const PRIORITY_COLOR = { low: '#36b37e', medium: '#ff991f', high: '#de350b' }
+const STATUS_LABEL   = { backlog: 'Backlog', todo: 'Todo', in_progress: 'In Progress', done: 'Done' }
+
+export default function TicketModal({ ticket, user, projectId, sprints = [], readOnly, onClose, onSaved }) {
+  const [form,           setForm]           = useState(ticket ? { ...ticket, assignee_id: ticket.assignee_id || '', due_date: ticket.due_date ? ticket.due_date.slice(0,10) : '', sprint_id: ticket.sprint_id || '' } : BLANK)
   const [users,          setUsers]          = useState([])
   const [error,          setError]          = useState('')
   const [loading,        setLoading]        = useState(false)
@@ -93,6 +96,7 @@ export default function TicketModal({ ticket, user, projectId, onClose, onSaved 
         ...form,
         assignee_id: form.assignee_id ? Number(form.assignee_id) : null,
         due_date:    form.due_date || null,
+        sprint_id:   form.sprint_id  ? Number(form.sprint_id)  : null,
         project_id:  projectId || null,
       }
       let res
@@ -136,8 +140,91 @@ export default function TicketModal({ ticket, user, projectId, onClose, onSaved 
     return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  const assigneeName = users.find(u => u.id === ticket?.assignee_id)?.name || ticket?.assignee_name
+
+  if (readOnly && ticket) {
+    return (
+      <div style={S.overlay}>
+        <div style={S.modal} onClick={e => e.stopPropagation()}>
+          <h2 style={S.h2}>
+            <span style={{ color: '#6b778c', fontWeight: 400, fontSize: '0.95rem' }}>#{ticket.id}</span>{' '}
+            {ticket.title}
+          </h2>
+
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            <span style={{
+              padding: '0.15rem 0.55rem', borderRadius: 10, fontSize: '0.75rem', fontWeight: 700,
+              background: (PRIORITY_COLOR[ticket.priority] || '#999') + '20',
+              color: PRIORITY_COLOR[ticket.priority] || '#999',
+              border: `1px solid ${(PRIORITY_COLOR[ticket.priority] || '#999')}40`,
+            }}>
+              {ticket.priority?.charAt(0).toUpperCase() + ticket.priority?.slice(1)} Priority
+            </span>
+            <span style={{
+              padding: '0.15rem 0.55rem', borderRadius: 10, fontSize: '0.75rem', fontWeight: 700,
+              background: '#dfe1e6', color: '#172b4d',
+            }}>
+              {STATUS_LABEL[ticket.status] || ticket.status}
+            </span>
+          </div>
+
+          <label style={S.label}>Description</label>
+          <div style={{
+            padding: '0.45rem 0.65rem', borderRadius: 4, border: '1px solid #dfe1e6',
+            fontSize: '0.9rem', minHeight: 60, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            color: ticket.description ? '#172b4d' : '#6b778c', background: '#f4f5f7',
+          }}>
+            {ticket.description || 'No description.'}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
+            <div>
+              <label style={S.label}>Assignee</label>
+              <div style={{ fontSize: '0.9rem', color: '#172b4d' }}>{assigneeName || 'Unassigned'}</div>
+            </div>
+            <div>
+              <label style={S.label}>Due Date</label>
+              <div style={{ fontSize: '0.9rem', color: '#172b4d' }}>{ticket.due_date ? ticket.due_date.slice(0, 10) : '—'}</div>
+            </div>
+            {ticket.sprint_id && sprints.length > 0 && (
+              <div>
+                <label style={S.label}>Sprint</label>
+                <div style={{ fontSize: '0.9rem', color: '#172b4d' }}>
+                  {sprints.find(s => s.id === ticket.sprint_id)?.name || '—'}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={S.footer}>
+            <button type="button" style={S.btnCancel} onClick={onClose}>Close</button>
+          </div>
+
+          <div style={S.divider} />
+          <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#172b4d', marginBottom: '0.6rem' }}>
+            Comments ({comments.length})
+          </div>
+          <div style={S.commentList}>
+            {comments.length === 0 && (
+              <div style={{ fontSize: '0.82rem', color: '#6b778c' }}>No comments yet.</div>
+            )}
+            {comments.map(c => (
+              <div key={c.id} style={S.comment}>
+                <div style={S.commentMeta}>
+                  <span><strong>{c.author_name}</strong></span>
+                  <span>{formatDate(c.created_at)}</span>
+                </div>
+                <div style={S.commentBody}>{c.body}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div style={S.overlay} onClick={onClose}>
+    <div style={S.overlay}>
       <div style={S.modal} onClick={e => e.stopPropagation()}>
         <h2 style={S.h2}>{ticket ? 'Edit Ticket' : 'New Ticket'}</h2>
         <form onSubmit={submit}>
@@ -175,6 +262,18 @@ export default function TicketModal({ ticket, user, projectId, onClose, onSaved 
 
           <label style={S.label}>Due Date</label>
           <input style={S.input} type="date" value={form.due_date} onChange={set('due_date')} />
+
+          {sprints.length > 0 && (
+            <>
+              <label style={S.label}>Sprint</label>
+              <select style={S.select} value={form.sprint_id} onChange={set('sprint_id')}>
+                <option value="">No Sprint</option>
+                {sprints.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </>
+          )}
 
           {error && <div style={S.error}>{error}</div>}
 

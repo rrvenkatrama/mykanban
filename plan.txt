@@ -1,43 +1,41 @@
-# Kanban Dashboard — Projects Feature Plan
-# Generated: 2026-03-19
+# Kanban Dashboard — AI News Feed Feature Plan
+# Generated: 2026-03-30
 
 ## Goal
-Add project-level kanban: user sees a Projects list first, picks a project, then sees that project's kanban board.
+Daily agentic/AI news feed visible in the dashboard. Fetcher runs every morning via cron,
+stores articles in DB, exposed via API, displayed in a dedicated NewsPage.
 
-## New Project Fields
-- name (required)
-- description
-- priority: low | medium | high
-- status: planning | active | on_hold | completed
-- planned_start_date, planned_end_date (DATE)
-- actual_start_date, actual_end_date (DATE)
-- created_by, created_at
+## Architecture
+- fetch-news.js  : standalone Node.js script — fetches 5 RSS feeds, parses, upserts to ai_news table
+- server.js      : GET /api/news + POST /api/news/refresh (spawns fetch-news.js)
+- NewsPage.jsx   : dedicated page — two tabs (Agentic AI / All AI), article cards with title link + source + date + summary
+- App.jsx        : add showNews state to switch between ProjectsPage and NewsPage
+- ProjectsPage   : add "AI News" button in header
+- Cron job       : 0 7 * * * on server runs fetch-news.js every morning
 
-## DB Changes (migrate_add_projects.py)
-1. CREATE TABLE projects (id, name, description, priority, status, planned_start_date, planned_end_date, actual_start_date, actual_end_date, created_by FK→users, created_at)
-2. ALTER TABLE tickets ADD COLUMN project_id INT UNSIGNED NULL FK→projects(ON DELETE SET NULL)
+## RSS Sources (no API key needed)
+1. TechCrunch AI   – https://techcrunch.com/tag/artificial-intelligence/feed/
+2. VentureBeat AI  – https://venturebeat.com/category/ai/feed/
+3. The Verge AI    – https://www.theverge.com/rss/ai-artificial-intelligence/index.xml
+4. MIT Tech Review – https://www.technologyreview.com/feed/
+5. HuggingFace     – https://huggingface.co/blog/feed.xml
 
-## Backend Changes (kanban-api/server.js)
-- GET    /api/projects       — list all projects
-- POST   /api/projects       — create project (auth)
-- PUT    /api/projects/:id   — update project (auth)
-- DELETE /api/projects/:id   — delete project (auth)
-- GET    /api/tickets?project_id=X — filter tickets by project
-- POST   /api/tickets — accept project_id field
+## Agentic tagging keywords
+agent, agentic, autonomous, multi-agent, mcp, copilot, orchestrat, tool use, function call
 
-## New UI Files
-- kanban-ui/src/components/ProjectsPage.jsx  — grid of project cards, create/edit/delete
-- kanban-ui/src/components/ProjectModal.jsx  — create/edit project form (all fields)
+## DB table: ai_news
+  id, title, url (unique, 500), source, summary, published_at, fetched_at, is_agentic
 
-## Modified UI Files
-- kanban-ui/src/App.jsx          — show ProjectsPage by default; pass selectedProject to KanbanBoard
-- kanban-ui/src/components/KanbanBoard.jsx — accept project prop, filter tickets by project.id, show project name in header, Back button
+## Files to create/modify
+1. migrate_add_news.py                         — creates ai_news table
+2. kanban-api/fetch-news.js                    — RSS fetcher + DB upsert (no new npm deps)
+3. kanban-api/server.js                        — GET /api/news + POST /api/news/refresh
+4. kanban-ui/src/components/NewsPage.jsx       — new component
+5. kanban-ui/src/App.jsx                       — add showNews state
+6. kanban-ui/src/components/ProjectsPage.jsx   — add AI News button in header
 
-## Navigation Flow
-Login → ProjectsPage (list) → click project → KanbanBoard (project-scoped) → Back → ProjectsPage
-
-## Deployment
-After implementation:
-  cd kanban-ui && npm run build
-  rsync -avz kanban-api/ rajramani@192.168.1.150:/home/rajramani/kanban-api/
-  ssh rajramani@192.168.1.150 "cd /home/rajramani && python3 kanban-api/../migrate_add_projects.py && systemctl --user restart kanban-api"
+## Deployment steps
+1. Run migrate_add_news.py on server
+2. rsync + restart kanban-api (no new npm deps — only mysql2 + built-in https)
+3. Run fetch-news.js once manually to seed data
+4. Add cron: 0 7 * * * /usr/bin/node /home/rajramani/kanban-api/fetch-news.js >> /home/rajramani/kanban-api/news-fetch.log 2>&1

@@ -1,9 +1,12 @@
-const express = require('express');
-const mysql   = require('mysql2/promise');
-const bcrypt  = require('bcryptjs');
-const jwt     = require('jsonwebtoken');
-const cors    = require('cors');
-const path    = require('path');
+const express    = require('express');
+const mysql      = require('mysql2/promise');
+const bcrypt     = require('bcryptjs');
+const jwt        = require('jsonwebtoken');
+const cors       = require('cors');
+const path       = require('path');
+const https      = require('https');
+const http       = require('http');
+const Anthropic  = require('@anthropic-ai/sdk').default;
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -306,7 +309,7 @@ app.post('/api/tickets', authRequired, async (req, res) => {
 
 app.put('/api/tickets/:id', authRequired, async (req, res) => {
   const { id } = req.params;
-  const { title, description, status, priority, assignee_id, due_date } = req.body;
+  const { title, description, status, priority, assignee_id, due_date, sprint_id } = req.body;
   try {
     await pool.execute(
       `UPDATE tickets
@@ -315,7 +318,8 @@ app.put('/api/tickets/:id', authRequired, async (req, res) => {
            status      = COALESCE(?, status),
            priority    = COALESCE(?, priority),
            assignee_id = ?,
-           due_date    = ?
+           due_date    = ?,
+           sprint_id   = ?
        WHERE id = ?`,
       [
         title || null,
@@ -324,6 +328,7 @@ app.put('/api/tickets/:id', authRequired, async (req, res) => {
         priority || null,
         assignee_id !== undefined ? assignee_id : null,
         due_date !== undefined ? due_date : null,
+        sprint_id !== undefined ? sprint_id || null : null,
         id,
       ]
     );
@@ -403,6 +408,346 @@ app.delete('/api/comments/:id', authRequired, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Sprints routes ────────────────────────────────────────────────────────────
+app.get('/api/sprints', authRequired, async (req, res) => {
+  const { project_id } = req.query;
+  if (!project_id) return res.status(400).json({ error: 'project_id is required' });
+  try {
+    const [rows] = await pool.execute(
+      `SELECT s.*,
+              u.name AS creator_name,
+              COUNT(t.id) AS ticket_count
+       FROM sprints s
+       LEFT JOIN users u ON u.id = s.created_by
+       LEFT JOIN tickets t ON t.sprint_id = s.id
+       WHERE s.project_id = ?
+       GROUP BY s.id
+       ORDER BY s.start_date ASC, s.created_at ASC`,
+      [Number(project_id)]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/sprints', authRequired, async (req, res) => {
+  const { name, project_id, status, start_date, end_date } = req.body;
+  if (!name)       return res.status(400).json({ error: 'name is required' });
+  if (!project_id) return res.status(400).json({ error: 'project_id is required' });
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO sprints (name, project_id, status, start_date, end_date, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [name, project_id, status || 'planned', start_date || null, end_date || null, req.user.id]
+    );
+    const [rows] = await pool.execute(
+      `SELECT s.*, u.name AS creator_name, 0 AS ticket_count
+       FROM sprints s LEFT JOIN users u ON u.id = s.created_by
+       WHERE s.id = ?`,
+      [result.insertId]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/sprints/:id', authRequired, async (req, res) => {
+  const { id } = req.params;
+  const { name, status, start_date, end_date } = req.body;
+  try {
+    await pool.execute(
+      `UPDATE sprints
+       SET name       = COALESCE(?, name),
+           status     = COALESCE(?, status),
+           start_date = ?,
+           end_date   = ?
+       WHERE id = ?`,
+      [name || null, status || null,
+       start_date !== undefined ? start_date || null : null,
+       end_date   !== undefined ? end_date   || null : null,
+       id]
+    );
+    const [rows] = await pool.execute(
+      `SELECT s.*, u.name AS creator_name, COUNT(t.id) AS ticket_count
+       FROM sprints s
+       LEFT JOIN users u ON u.id = s.created_by
+       LEFT JOIN tickets t ON t.sprint_id = s.id
+       WHERE s.id = ?
+       GROUP BY s.id`,
+      [id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Sprint not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/sprints/:id', authRequired, async (req, res) => {
+  try {
+    // Unassign tickets from this sprint before deleting
+    await pool.execute('UPDATE tickets SET sprint_id = NULL WHERE sprint_id = ?', [req.params.id]);
+    const [result] = await pool.execute('DELETE FROM sprints WHERE id = ?', [req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Sprint not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── News routes ───────────────────────────────────────────────────────────────
+app.get('/api/news', authRequired, async (req, res) => {
+  const { agentic } = req.query;
+  try {
+    let sql = `
+      SELECT n.id, n.title, n.url, n.source, n.summary, n.ai_summary, n.published_at, n.is_agentic,
+             COALESCE(s.is_read, 0)       AS is_read,
+             COALESCE(s.is_bookmarked, 0) AS is_bookmarked
+      FROM ai_news n
+      LEFT JOIN news_user_state s ON s.news_id = n.id AND s.user_id = ?`;
+    if (agentic === '1') sql += ' WHERE n.is_agentic = 1';
+    sql += ' ORDER BY n.published_at DESC, n.fetched_at DESC LIMIT 100';
+    const [rows] = await pool.execute(sql, [req.user.id]);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/news/:id/state', authRequired, async (req, res) => {
+  const { id } = req.params;
+  const { is_read, is_bookmarked } = req.body;
+  try {
+    await pool.execute(
+      `INSERT INTO news_user_state (user_id, news_id, is_read, is_bookmarked)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         is_read       = COALESCE(?, is_read),
+         is_bookmarked = COALESCE(?, is_bookmarked)`,
+      [
+        req.user.id, id,
+        is_read       !== undefined ? is_read       : 0,
+        is_bookmarked !== undefined ? is_bookmarked : 0,
+        is_read       !== undefined ? is_read       : null,
+        is_bookmarked !== undefined ? is_bookmarked : null,
+      ]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/news/refresh', authRequired, (_req, res) => {
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [path.join(__dirname, 'fetch-news.js')], {
+    detached: true, stdio: 'ignore', env: process.env,
+  });
+  child.unref();
+  res.json({ message: 'Refresh started' });
+});
+
+// ── Ticket bookmarks ─────────────────────────────────────────────────────────
+app.post('/api/tickets/:id/bookmark', authRequired, async (req, res) => {
+  try {
+    await pool.execute(
+      'INSERT IGNORE INTO ticket_bookmarks (user_id, ticket_id) VALUES (?, ?)',
+      [req.user.id, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/tickets/:id/bookmark', authRequired, async (req, res) => {
+  try {
+    await pool.execute(
+      'DELETE FROM ticket_bookmarks WHERE user_id = ? AND ticket_id = ?',
+      [req.user.id, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Bookmarks (news + tickets) ────────────────────────────────────────────────
+app.get('/api/bookmarks', authRequired, async (req, res) => {
+  try {
+    const [news] = await pool.execute(
+      `SELECT n.id, n.title, n.url, n.source, n.summary, n.ai_summary,
+              n.published_at, n.is_agentic,
+              1 AS is_bookmarked,
+              COALESCE(s.is_read, 0) AS is_read
+       FROM news_user_state s
+       JOIN ai_news n ON n.id = s.news_id
+       WHERE s.user_id = ? AND s.is_bookmarked = 1
+       ORDER BY n.published_at DESC`,
+      [req.user.id]
+    );
+    const [tickets] = await pool.execute(
+      `SELECT t.*, u1.name AS assignee_name, u2.name AS creator_name,
+              b.created_at AS bookmarked_at
+       FROM ticket_bookmarks b
+       JOIN tickets t ON t.id = b.ticket_id
+       LEFT JOIN users u1 ON u1.id = t.assignee_id
+       LEFT JOIN users u2 ON u2.id = t.created_by
+       WHERE b.user_id = ?
+       ORDER BY b.created_at DESC`,
+      [req.user.id]
+    );
+    res.json({ news, tickets });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Article chat ─────────────────────────────────────────────────────────────
+app.post('/api/news/:id/chat', authRequired, async (req, res) => {
+  const { id } = req.params;
+  const { messages } = req.body;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages array required' });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on server' });
+  }
+  try {
+    const [rows] = await pool.execute(
+      'SELECT title, source, summary, ai_summary, published_at FROM ai_news WHERE id = ?', [id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Article not found' });
+    const a = rows[0];
+
+    const contextLines = [
+      `Article: "${a.title}"`,
+      `Source: ${a.source}`,
+      a.published_at ? `Published: ${new Date(a.published_at).toDateString()}` : '',
+      a.ai_summary  ? `\nAI Summary: ${a.ai_summary}` : '',
+      a.summary     ? `\nExcerpt: ${a.summary}` : '',
+    ].filter(Boolean).join('\n');
+
+    const anthropic = new Anthropic();
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 512,
+      system: `You are an AI assistant helping the user understand and explore a news article. Answer questions concisely. Draw on your broader knowledge for context, comparisons, and practical advice. Be direct and opinionated when asked ("should I learn this?").\n\n${contextLines}`,
+      messages: messages.slice(-10), // cap to last 10 turns to limit tokens
+    });
+
+    const reply = response.content.find(b => b.type === 'text')?.text?.trim() || '';
+    res.json({ reply });
+  } catch (err) {
+    console.error('Chat error:', err.message);
+    res.status(500).json({ error: 'Chat failed' });
+  }
+});
+
+// ── Article summarizer ────────────────────────────────────────────────────────
+function fetchArticleText(url) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; KanbanNewsBot/1.0)' },
+      timeout: 12000,
+    }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        let loc = res.headers.location;
+        if (loc.startsWith('/')) { const b = new URL(url); loc = `${b.protocol}//${b.host}${loc}`; }
+        return resolve(fetchArticleText(loc));
+      }
+      if (res.statusCode !== 200) { res.resume(); return resolve(null); }
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      res.on('error', () => resolve(null));
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+function extractReadableText(html) {
+  if (!html) return '';
+  // Try to get article/main content first
+  const articleMatch = html.match(/<(?:article|main)[^>]*>([\s\S]*?)<\/(?:article|main)>/i);
+  const src = articleMatch ? articleMatch[1] : html;
+  return src
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ').replace(/&#\d+;/g, '').replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ').trim();
+}
+
+app.post('/api/news/:id/summarize', authRequired, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [rows] = await pool.execute('SELECT * FROM ai_news WHERE id = ?', [id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Article not found' });
+    const article = rows[0];
+
+    // Return cached AI summary if available
+    if (article.ai_summary) return res.json({ summary: article.ai_summary });
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on server' });
+    }
+
+    // Fetch and extract article text; fall back to RSS snippet
+    let text = '';
+    const html = await fetchArticleText(article.url);
+    if (html) {
+      text = extractReadableText(html).slice(0, 3000);
+    }
+    if (text.length < 100 && article.summary) {
+      text = article.summary; // fall back to RSS excerpt
+    }
+    if (!text) return res.status(422).json({ error: 'Could not extract article content' });
+
+    const anthropic = new Anthropic();
+    const message = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 256,
+      messages: [{
+        role: 'user',
+        content: `Summarize this article in 3 concise sentences. Cover: what was announced or discovered, why it matters for AI practitioners, and any key technical detail.\n\nTitle: ${article.title}\n\n${text}`,
+      }],
+    });
+
+    const summary = message.content.find(b => b.type === 'text')?.text?.trim() || '';
+
+    // Cache summary in DB
+    await pool.execute('UPDATE ai_news SET ai_summary = ? WHERE id = ?', [summary, id]);
+
+    // Auto-mark as read for this user
+    await pool.execute(
+      `INSERT INTO news_user_state (user_id, news_id, is_read, is_bookmarked) VALUES (?, ?, 1, 0)
+       ON DUPLICATE KEY UPDATE is_read = 1`,
+      [req.user.id, id]
+    );
+
+    res.json({ summary });
+  } catch (err) {
+    console.error('Summarize error:', err.message);
+    res.status(500).json({ error: 'Summarization failed' });
   }
 });
 
